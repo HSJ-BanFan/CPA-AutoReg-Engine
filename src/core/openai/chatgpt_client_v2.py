@@ -2,9 +2,12 @@
 ChatGPT registration client.
 """
 
+import base64
+import json
 import random
 import time
 import uuid
+from http.cookiejar import Cookie
 from urllib.parse import urlparse
 from typing import Any, Dict, Optional
 
@@ -21,8 +24,11 @@ from .chatgpt_flow_utils import (
     random_delay,
     seed_oai_device_cookie,
 )
-from .sentinel_token_v2 import build_sentinel_token
+from .sentinel_token_v2 import build_browser_sentinel_token, build_sentinel_token
 
+
+_CLIENT_AUTH_SESSION_COOKIE = "oai-client-auth-session"
+_CLIENT_AUTH_SESSION_MAX_BYTES = 4096
 
 _CHROME_PROFILES = [
     {
@@ -255,6 +261,26 @@ class ChatGPTClient:
             return cookie.value
         return ""
 
+    def _build_sentinel_token(self, flow: str, page_url: str) -> Optional[str]:
+        token = build_browser_sentinel_token(
+            flow=flow,
+            proxy=getattr(self, "proxy", None),
+            page_url=page_url,
+            headless=self.browser_mode != "headed",
+            device_id=self.device_id,
+            user_agent=self.ua,
+        )
+        if token:
+            return token
+        return build_sentinel_token(
+            self.session,
+            self.device_id,
+            flow=flow,
+            user_agent=self.ua,
+            sec_ch_ua=self.sec_ch_ua,
+            impersonate=self.impersonate,
+        )
+
     def get_next_auth_session_token(self) -> str:
         return self._get_cookie_value("__Secure-next-auth.session-token", "chatgpt.com")
 
@@ -321,6 +347,8 @@ class ChatGPTClient:
         )
         normalized = {
             "access_token": access_token,
+            "refresh_token": str(session_data.get("refreshToken") or "").strip(),
+            "id_token": str(session_data.get("idToken") or "").strip(),
             "session_token": session_token,
             "account_id": account_id,
             "user_id": user_id,
@@ -454,9 +482,16 @@ class ChatGPTClient:
                 return ""
         return ""
 
-    def register_user(self, email: str, password: str):
+    def register_user(self, email: str, password: str, return_state: bool = False):
         self._log(f"注册用户: {email}")
         url = f"{self.AUTH}/api/accounts/user/register"
+        sentinel_token = self._build_sentinel_token(
+            flow="username_password_create",
+            page_url=f"{self.AUTH}/create-account/password",
+        )
+        extra_headers = {"oai-device-id": self.device_id}
+        if sentinel_token:
+            extra_headers["openai-sentinel-token"] = sentinel_token
         headers = self._headers(
             url,
             accept="application/json",
@@ -464,14 +499,26 @@ class ChatGPTClient:
             origin=self.AUTH,
             content_type="application/json",
             fetch_site="same-origin",
+            extra_headers=extra_headers,
         )
         headers.update(generate_datadog_trace())
         payload = {"username": email, "password": password}
         try:
             self._browser_pause()
-            r = self.session.post(url, json=payload, headers=headers, timeout=30)
+            r = self.session.post(url, json=payload, headers=headers, timeout=30, allow_redirects=False)
             if r.status_code == 200:
+                try:
+                    data = r.json()
+                except Exception:
+                    data = {}
+                if not self._persist_client_auth_session(data):
+                    self._log("客户端认证会话无效")
+                    return False, "客户端认证会话无效"
+                sanitized_data = self._sanitize_client_auth_session(data)
                 self._log("注册成功")
+                if return_state:
+                    response_url = getattr(r, "url", "") or f"{self.AUTH}/email-verification"
+                    return True, self._state_from_payload(sanitized_data, current_url=str(response_url))
                 return True, "注册成功"
             try:
                 error_msg = (r.json().get("error") or {}).get("message", r.text[:200])
@@ -483,49 +530,182 @@ class ChatGPTClient:
             self._log(f"注册异常: {e}")
             return False, str(e)
 
-    def send_email_otp(self) -> bool:
+    @staticmethod
+    def _sanitize_client_auth_session(data: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in data.items()
+            if key not in {_CLIENT_AUTH_SESSION_COOKIE, "client_auth_session", "session_id"}
+        }
+
+    @staticmethod
+    def _extract_client_auth_session(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        auth_session = data.get(_CLIENT_AUTH_SESSION_COOKIE)
+        if isinstance(auth_session, dict):
+            return auth_session
+        auth_session = data.get("client_auth_session")
+        if not isinstance(auth_session, dict):
+            return None
+        session_id = data.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        normalized = {**auth_session, "session_id": session_id}
+        checksum = data.get("checksum")
+        if isinstance(checksum, str) and checksum:
+            normalized["checksum"] = checksum
+        return normalized
+
+    def _client_auth_session_domain(self) -> str:
+        return urlparse(self.AUTH).hostname or "auth.openai.com"
+
+    @staticmethod
+    def _encode_client_auth_session(auth_session: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(auth_session.get("session_id"), str) or not auth_session["session_id"]:
+            return None
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(auth_session, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).rstrip(b"=").decode("ascii")
+        if len(encoded) > _CLIENT_AUTH_SESSION_MAX_BYTES:
+            return None
+        return encoded
+
+    def _persist_client_auth_session(self, data: Dict[str, Any]) -> bool:
+        auth_session = self._extract_client_auth_session(data)
+        if auth_session is None:
+            return False
+        encoded = self._encode_client_auth_session(auth_session)
+        if encoded is None:
+            return False
+        cookie = Cookie(
+            version=0,
+            name=_CLIENT_AUTH_SESSION_COOKIE,
+            value=encoded,
+            port=None,
+            port_specified=False,
+            domain=self._client_auth_session_domain(),
+            domain_specified=True,
+            domain_initial_dot=False,
+            path="/",
+            path_specified=True,
+            secure=True,
+            expires=None,
+            discard=True,
+            comment=None,
+            comment_url=None,
+            rest={"HttpOnly": True, "SameSite": "Lax"},
+            rfc2109=False,
+        )
+        if hasattr(self.session.cookies, "set_cookie"):
+            self.session.cookies.set_cookie(cookie)
+        elif hasattr(self.session.cookies, "jar") and hasattr(self.session.cookies.jar, "set_cookie"):
+            self.session.cookies.jar.set_cookie(cookie)
+        else:
+            return False
+        return True
+
+    def send_email_otp(self, state: Optional[FlowState] = None) -> bool:
         self._log("触发发送验证码...")
-        url = f"{self.AUTH}/api/accounts/email-otp/send"
+        url = f"{self.AUTH}/api/accounts/email-otp/resend"
+        referer = (state.current_url or state.continue_url) if state else ""
+        referer = referer or f"{self.AUTH}/create-account/password"
         try:
             self._browser_pause()
-            r = self.session.get(
+            r = self.session.post(
                 url,
+                json={},
                 headers=self._headers(
                     url,
-                    accept="application/json, text/plain, */*",
-                    referer=f"{self.AUTH}/create-account/password",
+                    accept="application/json",
+                    referer=referer,
+                    origin=self.AUTH,
+                    content_type="application/json",
                     fetch_site="same-origin",
+                    extra_headers={"oai-device-id": self.device_id},
                 ),
-                allow_redirects=True,
+                allow_redirects=False,
                 timeout=30,
             )
-            return r.status_code == 200
+            if r.status_code != 200:
+                return False
+            try:
+                data = r.json()
+            except Exception:
+                self._log("发送验证码响应不是有效 JSON")
+                return False
+            if _CLIENT_AUTH_SESSION_COOKIE in data and not self._persist_client_auth_session(data):
+                self._log("发送验证码响应包含无效客户端认证会话")
+                return False
+            return True
         except Exception as e:
             self._log(f"发送验证码失败: {e}")
             return False
 
-    def verify_email_otp(self, otp_code: str, return_state: bool = False):
-        self._log(f"验证 OTP 码: {otp_code}")
-        url = f"{self.AUTH}/api/accounts/email-otp/validate"
+    def _fetch_client_auth_session_dump(self, referer: str) -> tuple[Optional[dict], str]:
+        url = f"{self.AUTH}/api/accounts/client_auth_session_dump"
         headers = self._headers(
             url,
             accept="application/json",
-            referer=f"{self.AUTH}/email-verification",
+            referer=referer,
+            fetch_site="same-origin",
+            extra_headers={"oai-device-id": self.device_id},
+        )
+        headers.update(generate_datadog_trace())
+        try:
+            self._browser_pause()
+            r = self.session.get(url, headers=headers, timeout=30)
+            self._log(f"客户端认证会话转储状态: {r.status_code}")
+            if r.status_code != 200:
+                self._log(f"获取客户端认证会话失败: {r.status_code}")
+                return None, ""
+            try:
+                data = r.json()
+            except Exception:
+                self._log("客户端认证会话响应不是有效 JSON")
+                return None, ""
+            field_names = sorted(data.keys()) if isinstance(data, dict) else []
+            auth_session = self._extract_client_auth_session(data) if isinstance(data, dict) else None
+            self._log(f"客户端认证会话转储字段: {field_names}")
+            self._log(f"客户端认证会话存在: {isinstance(auth_session, dict)}")
+            self._log(f"客户端认证会话包含 session_id: {isinstance(auth_session, dict) and bool(auth_session.get('session_id'))}")
+            return data, f"{self.AUTH}/about-you"
+        except Exception as e:
+            self._log(f"获取客户端认证会话异常: {e}")
+            return None, ""
+
+    def verify_email_otp(self, otp_code: str, return_state: bool = False, state: Optional[FlowState] = None):
+        self._log("验证 OTP 码")
+        url = f"{self.AUTH}/api/accounts/email-otp/validate"
+        referer = (state.current_url or state.continue_url) if state else ""
+        referer = referer or f"{self.AUTH}/email-verification"
+        sentinel_token = self._build_sentinel_token(
+            flow="authorize_continue",
+            page_url=referer,
+        )
+        extra_headers = {"oai-device-id": self.device_id}
+        if sentinel_token:
+            extra_headers["openai-sentinel-token"] = sentinel_token
+        headers = self._headers(
+            url,
+            accept="application/json",
+            referer=referer,
             origin=self.AUTH,
             content_type="application/json",
             fetch_site="same-origin",
+            extra_headers=extra_headers,
         )
         headers.update(generate_datadog_trace())
         payload = {"code": otp_code}
         try:
             self._browser_pause()
-            r = self.session.post(url, json=payload, headers=headers, timeout=30)
+            r = self.session.post(url, json=payload, headers=headers, timeout=30, allow_redirects=False)
+            self._log(f"验证码验证状态: {r.status_code}")
             if r.status_code == 200:
-                try:
-                    data = r.json()
-                except Exception:
-                    data = {}
-                next_state = self._state_from_payload(data, current_url=str(r.url) or f"{self.AUTH}/about-you")
+                data, response_url = self._fetch_client_auth_session_dump(referer)
+                if data is None or not self._persist_client_auth_session(data):
+                    self._log("客户端认证会话无效")
+                    return False, "客户端认证会话无效"
+                sanitized_data = self._sanitize_client_auth_session(data)
+                next_state = self._state_from_payload(sanitized_data, current_url=response_url)
                 self._log(f"验证成功 {describe_flow_state(next_state)}")
                 return (True, next_state) if return_state else (True, "验证成功")
             error_msg = r.text[:200]
@@ -539,13 +719,9 @@ class ChatGPTClient:
         name = f"{first_name} {last_name}"
         self._log(f"完成账号创建: {name}")
         url = f"{self.AUTH}/api/accounts/create_account"
-        sentinel_token = build_sentinel_token(
-            self.session,
-            self.device_id,
+        sentinel_token = self._build_sentinel_token(
             flow="authorize_continue",
-            user_agent=self.ua,
-            sec_ch_ua=self.sec_ch_ua,
-            impersonate=self.impersonate,
+            page_url=f"{self.AUTH}/about-you",
         )
         if sentinel_token:
             self._log("create_account: 已生成 sentinel token")
@@ -572,12 +748,28 @@ class ChatGPTClient:
                     data = r.json()
                 except Exception:
                     data = {}
-                next_state = self._state_from_payload(data, current_url=str(r.url) or self.BASE)
+                if self._extract_client_auth_session(data) is not None and not self._persist_client_auth_session(data):
+                    self._log("客户端认证会话无效")
+                    return False, "客户端认证会话无效"
+                sanitized_data = self._sanitize_client_auth_session(data)
+                next_state = self._state_from_payload(sanitized_data, current_url=str(r.url) or self.BASE)
                 self._log(f"账号创建成功 {describe_flow_state(next_state)}")
                 return (True, next_state) if return_state else (True, "账号创建成功")
             error_msg = r.text[:200]
             self._log(f"创建失败: {r.status_code} - {error_msg}")
-            return False, f"HTTP {r.status_code}"
+            error_code = ""
+            try:
+                data = r.json()
+            except Exception:
+                data = {}
+            if not (data.get("error") or {}).get("code"):
+                try:
+                    data = json.loads(r.text)
+                except Exception:
+                    pass
+            error_code = str((data.get("error") or {}).get("code") or "")
+            suffix = f": {error_code}" if error_code else ""
+            return False, f"HTTP {r.status_code}{suffix}"
         except Exception as e:
             self._log(f"创建异常: {e}")
             return False, str(e)
@@ -628,6 +820,7 @@ class ChatGPTClient:
         register_submitted = False
         otp_verified = False
         account_created = False
+        otp_sent_at = None
         seen_states = {}
 
         for _ in range(12):
@@ -645,21 +838,29 @@ class ChatGPTClient:
                 self._log("全新注册流程")
                 if register_submitted:
                     return False, "注册密码阶段重复进入"
-                success, msg = self.register_user(email, password)
+                otp_sent_at = time.time()
+                success, next_state = self.register_user(email, password, return_state=True)
                 if not success:
-                    return False, f"注册失败: {msg}"
+                    return False, f"注册失败: {next_state}"
                 register_submitted = True
-                if not self.send_email_otp():
-                    self._log("发送验证码接口返回失败，继续等待邮箱中的验证码...")
-                state = self._state_from_url(f"{self.AUTH}/email-verification")
+                if isinstance(next_state, FlowState) and self._state_is_email_otp(next_state):
+                    state = next_state
+                else:
+                    state = self._state_from_url(f"{self.AUTH}/email-verification")
                 continue
 
             if self._state_is_email_otp(state):
                 self._log("等待邮箱验证码...")
-                otp_code = email_adapter.wait_for_verification_code(email, timeout=30)
+                if otp_sent_at is None:
+                    otp_sent_at = time.time()
+                    if not register_submitted and not self.send_email_otp(state=state):
+                        self._log("发送验证码接口返回失败")
+                        return False, "发送验证码失败"
+                otp_timeout = int(getattr(email_adapter, "verification_timeout", 30))
+                otp_code = email_adapter.wait_for_verification_code(email, timeout=otp_timeout, otp_sent_at=otp_sent_at)
                 if not otp_code:
                     return False, "未收到验证码"
-                success, next_state = self.verify_email_otp(otp_code, return_state=True)
+                success, next_state = self.verify_email_otp(otp_code, return_state=True, state=state)
                 if not success:
                     return False, f"验证码失败: {next_state}"
                 otp_verified = True

@@ -5,9 +5,11 @@ description = "CPA-Codex-Manager"
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.12.0",
+    "camoufox>=0.4.11",
     "curl-cffi>=0.14.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    "playwright>=1.40.0",
     "pywebview>=5.1",
     "jinja2>=3.1.0",
     "python-multipart>=0.0.6",
@@ -27,6 +29,10 @@ dev = [
     "httpx>=0.24.0",
 ]
 payment = [
+    "playwright>=1.40.0",
+]
+browser = [
+    "camoufox>=0.4.11",
     "playwright>=1.40.0",
 ]
 

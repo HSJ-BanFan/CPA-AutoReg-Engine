@@ -2,8 +2,9 @@
 API 路由模块
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..auth import require_webui_auth
 from .accounts import router as accounts_router
 from .registration import router as registration_router
 from .settings import router as settings_router
@@ -14,7 +15,7 @@ from .upload.sub2api_services import router as sub2api_services_router
 from .upload.tm_services import router as tm_services_router
 from .cliproxy import router as cliproxy_router
 
-api_router = APIRouter()
+api_router = APIRouter(dependencies=[Depends(require_webui_auth)])
 
 # 注册各模块路由
 api_router.include_router(accounts_router, prefix="/accounts", tags=["accounts"])

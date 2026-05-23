@@ -4,7 +4,6 @@
 
 import logging
 from typing import List, Optional, Dict, Any
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -12,6 +11,8 @@ from ...database import crud
 from ...database.session import get_db
 from ...database.models import EmailService as EmailServiceModel, RegistrationTask
 from ...services import EmailServiceFactory, EmailServiceType
+from ...services.cloudflare_temp_email import normalize_public_base_url
+from ...services.imap_mail import normalize_imap_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -68,7 +69,10 @@ class ServiceTestResult(BaseModel):
 # ============== Helper Functions ==============
 
 # 敏感字段列表，返回响应时需要过滤
-SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token', 'admin_password'}
+SENSITIVE_FIELDS = {
+    'password', 'api_key', 'refresh_token', 'access_token', 'admin_token',
+    'admin_password', 'jwt', 'mailbox_jwt', 'token'
+}
 
 def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """过滤敏感配置信息"""
@@ -115,12 +119,25 @@ def validate_service_config(service_type: EmailServiceType, config: Dict[str, An
         required = ["base_url", "admin_email", "admin_password"]
     elif service_type == EmailServiceType.FREEMAIL:
         required = ["base_url", "admin_token"]
+    elif service_type == EmailServiceType.CLOUDFLARE_TEMP_EMAIL:
+        required = ["base_url", "domain"]
+    elif service_type == EmailServiceType.IMAP_MAIL:
+        required = ["domain", "host", "email", "password"]
     else:
         return service_config
 
     missing = [key for key in required if not service_config.get(key)]
     if missing:
         raise HTTPException(status_code=400, detail=f"缺少必需配置: {', '.join(missing)}")
+
+    try:
+        if "base_url" in required:
+            service_config["base_url"] = normalize_public_base_url(service_config["base_url"])
+        if service_type == EmailServiceType.IMAP_MAIL:
+            service_config = normalize_imap_config(service_config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     return service_config
 
 
@@ -148,6 +165,7 @@ async def get_email_services_stats():
             'temp_mail_count': 0,
             'duck_mail_count': 0,
             'freemail_count': 0,
+            'cloudflare_temp_email_count': 0,
             'imap_mail_count': 0,
             'tempmail_available': True,  # 临时邮箱始终可用
             'enabled_count': enabled_count
@@ -162,6 +180,8 @@ async def get_email_services_stats():
                 stats['duck_mail_count'] = count
             elif service_type == 'freemail':
                 stats['freemail_count'] = count
+            elif service_type == 'cloudflare_temp_email':
+                stats['cloudflare_temp_email_count'] = count
             elif service_type == 'imap_mail':
                 stats['imap_mail_count'] = count
 
@@ -225,15 +245,30 @@ async def get_service_types():
                 ]
             },
             {
+                "value": "cloudflare_temp_email",
+                "label": "Cloudflare Temp Email",
+                "description": "Cloudflare Worker 临时邮箱服务，使用邮箱 JWT 轮询收件箱",
+                "config_fields": [
+                    {"name": "base_url", "label": "API 地址", "required": True, "placeholder": "https://mail.example.com"},
+                    {"name": "domain", "label": "邮箱域名", "required": True, "placeholder": "example.com"},
+                    {"name": "timeout", "label": "超时时间", "required": False, "default": 120},
+                    {"name": "poll_interval", "label": "轮询间隔", "required": False, "default": 3},
+                    {"name": "mail_limit", "label": "邮件数量", "required": False, "default": 10},
+                ]
+            },
+            {
                 "value": "imap_mail",
                 "label": "IMAP 邮箱",
                 "description": "标准 IMAP 协议邮箱（Gmail/QQ/163等），仅用于接收验证码，强制直连",
                 "config_fields": [
+                    {"name": "domain", "label": "收信域名", "required": True, "placeholder": "example.com"},
                     {"name": "host", "label": "IMAP 服务器", "required": True, "placeholder": "imap.gmail.com"},
                     {"name": "port", "label": "端口", "required": False, "default": 993},
                     {"name": "use_ssl", "label": "使用 SSL", "required": False, "default": True},
                     {"name": "email", "label": "邮箱地址", "required": True},
                     {"name": "password", "label": "密码/授权码", "required": True, "secret": True},
+                    {"name": "timeout", "label": "超时时间", "required": False, "default": 120},
+                    {"name": "poll_interval", "label": "轮询间隔", "required": False, "default": 5},
                 ]
             }
         ]

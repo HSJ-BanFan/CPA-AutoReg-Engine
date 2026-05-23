@@ -23,7 +23,9 @@ let availableServices = {
     temp_mail: { available: false, services: [] },
     duck_mail: { available: false, services: [] },
     freemail: { available: false, services: [] },
-    cloud_mail: { available: false, services: [] }
+    cloud_mail: { available: false, services: [] },
+    cloudflare_temp_email: { available: false, services: [] },
+    imap_mail: { available: false, services: [] }
 };
 
 // WebSocket 相关变量
@@ -301,7 +303,9 @@ function openEmailServiceModal() {
     // 其他服务
     const otherServices = [
         { key: 'cloud_mail', name: 'CloudMail', desc: 'Cloudflare Email 路由', icon: '🌫️' },
-        { key: 'freemail', name: 'Freemail', desc: 'Cloudflare Workers 临时邮箱', icon: '📬' }
+        { key: 'freemail', name: 'Freemail', desc: 'Cloudflare Workers 临时邮箱', icon: '📬' },
+        { key: 'cloudflare_temp_email', name: 'Cloudflare Temp Email', desc: 'Cloudflare Worker 邮箱 JWT 模式', icon: '☁️' },
+        { key: 'imap_mail', name: 'IMAP Catch-all', desc: 'Cloudflare Email Routing 转发到 Gmail/Outlook IMAP', icon: 'IMAP' }
     ];
 
     otherServices.forEach(os => {
@@ -319,9 +323,59 @@ function openEmailServiceModal() {
 function selectService(value, name) {
     elements.emailService.value = value;
     elements.emailServiceDisplay.textContent = name;
+    saveEmailServiceSelection(value);
 
     // 触发原始的切换逻辑
     handleServiceChange({ target: { value } });
+}
+
+const EMAIL_SERVICE_STORAGE_KEY = 'registrationEmailService';
+const CONFIGURED_EMAIL_SERVICE_PRIORITY = ['imap_mail', 'cloudflare_temp_email', 'freemail', 'cloud_mail'];
+
+function loadSavedEmailServiceSelection() {
+    try {
+        return localStorage.getItem(EMAIL_SERVICE_STORAGE_KEY);
+    } catch (error) {
+        return null;
+    }
+}
+
+function saveEmailServiceSelection(value) {
+    try {
+        localStorage.setItem(EMAIL_SERVICE_STORAGE_KEY, value);
+    } catch (error) { }
+}
+
+function findEmailServiceSelection(value, services = availableServices) {
+    if (!value) return null;
+
+    const [type, id] = value.split(':');
+    if (type === 'tempmail' && id === 'default' && services.tempmail && services.tempmail.available) {
+        return { value, name: 'Tempmail.lol (自动)' };
+    }
+
+    const group = services[type];
+    if (!group || !group.available || !Array.isArray(group.services)) return null;
+
+    const service = group.services.find(s => String(s.id) === id);
+    if (!service) return null;
+
+    return { value, name: service.name };
+}
+
+function getDefaultEmailServiceSelection(services) {
+    const savedSelection = findEmailServiceSelection(loadSavedEmailServiceSelection(), services);
+    if (savedSelection) return savedSelection;
+
+    for (const type of CONFIGURED_EMAIL_SERVICE_PRIORITY) {
+        const group = services[type];
+        if (group && group.available && Array.isArray(group.services) && group.services.length > 0) {
+            const service = group.services[0];
+            return { value: `${type}:${service.id}`, name: service.name };
+        }
+    }
+
+    return { value: 'tempmail:default', name: 'Tempmail.lol (自动)' };
 }
 
 // 加载可用的邮箱服务
@@ -330,8 +384,8 @@ async function loadAvailableServices() {
         const data = await api.get('/registration/available-services');
         availableServices = data;
 
-        // 设置默认服务 (Tempmail)
-        selectService('tempmail:default', 'Tempmail.lol (自动)');
+        const defaultSelection = getDefaultEmailServiceSelection(data);
+        selectService(defaultSelection.value, defaultSelection.name);
 
         addLog('info', '[系统] 邮箱服务列表已加载');
     } catch (error) {
@@ -378,6 +432,16 @@ function handleServiceChange(e) {
         const service = availableServices.cloud_mail.services.find(s => s.id == id);
         if (service) {
             addLog('info', `[系统] 已选择 CloudMail 服务: ${service.name}`);
+        }
+    } else if (type === 'cloudflare_temp_email') {
+        const service = availableServices.cloudflare_temp_email.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 Cloudflare Temp Email 服务: ${service.name}`);
+        }
+    } else if (type === 'imap_mail') {
+        const service = availableServices.imap_mail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 IMAP Catch-all 服务: ${service.name}`);
         }
     }
 }

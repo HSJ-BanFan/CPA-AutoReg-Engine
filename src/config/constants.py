@@ -35,6 +35,8 @@ class EmailServiceType(str, Enum):
     TEMPMAIL = "tempmail"
     CLOUD_MAIL = "cloud_mail"
     FREEMAIL = "freemail"
+    CLOUDFLARE_TEMP_EMAIL = "cloudflare_temp_email"
+    IMAP_MAIL = "imap_mail"
 
 
 # ============================================================================
@@ -58,7 +60,7 @@ OPENAI_API_ENDPOINTS = {
     "signup": "https://auth.openai.com/api/accounts/authorize/continue",
     "register": "https://auth.openai.com/api/accounts/user/register",
     "password_verify": "https://auth.openai.com/api/accounts/password/verify",
-    "send_otp": "https://auth.openai.com/api/accounts/email-otp/send",
+    "send_otp": "https://auth.openai.com/api/accounts/email-otp/resend",
     "validate_otp": "https://auth.openai.com/api/accounts/email-otp/validate",
     "create_account": "https://auth.openai.com/api/accounts/create_account",
     "select_workspace": "https://auth.openai.com/api/accounts/workspace/select",
@@ -112,6 +114,27 @@ EMAIL_SERVICE_DEFAULTS = {
         "domain": "",
         "timeout": 30,
         "poll_interval": 3,
+        "mail_limit": 20,
+    },
+    "cloudflare_temp_email": {
+        "base_url": "",
+        "domain": "",
+        "timeout": 30,
+        "poll_interval": 3,
+        "mail_limit": 10,
+        "max_retries": 3,
+        "retry_delay": 1,
+    },
+    "imap_mail": {
+        "domain": "",
+        "host": "",
+        "port": 993,
+        "use_ssl": True,
+        "email": "",
+        "password": "",
+        "folder": "INBOX",
+        "timeout": 120,
+        "poll_interval": 5,
         "mail_limit": 20,
     }
 }

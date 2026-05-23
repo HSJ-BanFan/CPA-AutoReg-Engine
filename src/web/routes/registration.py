@@ -1325,6 +1325,16 @@ async def get_available_email_services():
             "available": False,
             "count": 0,
             "services": []
+        },
+        "cloudflare_temp_email": {
+            "available": False,
+            "count": 0,
+            "services": []
+        },
+        "imap_mail": {
+            "available": False,
+            "count": 0,
+            "services": []
         }
     }
 
@@ -1372,6 +1382,43 @@ async def get_available_email_services():
 
         result["freemail"]["count"] = len(freemail_services)
         result["freemail"]["available"] = len(freemail_services) > 0
+
+        cloudflare_temp_email_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "cloudflare_temp_email",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+
+        for service in cloudflare_temp_email_services:
+            config = service.config or {}
+            result["cloudflare_temp_email"]["services"].append({
+                "id": service.id,
+                "name": service.name,
+                "type": "cloudflare_temp_email",
+                "domain": config.get("domain"),
+                "priority": service.priority
+            })
+
+        result["cloudflare_temp_email"]["count"] = len(cloudflare_temp_email_services)
+        result["cloudflare_temp_email"]["available"] = len(cloudflare_temp_email_services) > 0
+
+        imap_mail_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "imap_mail",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+
+        for service in imap_mail_services:
+            config = service.config or {}
+            result["imap_mail"]["services"].append({
+                "id": service.id,
+                "name": service.name,
+                "type": "imap_mail",
+                "domain": config.get("domain"),
+                "host": config.get("host"),
+                "priority": service.priority
+            })
+
+        result["imap_mail"]["count"] = len(imap_mail_services)
+        result["imap_mail"]["available"] = len(imap_mail_services) > 0
 
     return result
 

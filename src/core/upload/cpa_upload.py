@@ -174,6 +174,27 @@ def _resolve_chatgpt_account_id(account: Account) -> str:
     return ""
 
 
+def _resolve_plan_type(account: Account) -> str:
+    extra = account.extra_data or {}
+    candidates = [
+        getattr(account, "subscription_type", None),
+        extra.get("chatgpt_plan_type"),
+        extra.get("plan_type"),
+        extra.get("planType"),
+        (extra.get("account") or {}).get("chatgpt_plan_type"),
+        (extra.get("account") or {}).get("plan_type"),
+        (extra.get("account") or {}).get("planType"),
+        ((extra.get("raw_session") or {}).get("account") or {}).get("chatgpt_plan_type"),
+        ((extra.get("raw_session") or {}).get("account") or {}).get("plan_type"),
+        ((extra.get("raw_session") or {}).get("account") or {}).get("planType"),
+    ]
+    for item in candidates:
+        value = str(item or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _normalize_cpa_auth_files_url(api_url: str) -> str:
     """将用户填写的 CPA 地址规范化为 auth-files 接口地址。"""
     normalized = (api_url or "").strip().rstrip("/")
@@ -260,6 +281,7 @@ def generate_token_json(account: Account) -> dict:
     if account.access_token and not effective_id_token:
         effective_id_token = _build_compat_id_token(access_token=account.access_token, email=account.email)
 
+    plan_type = _resolve_plan_type(account)
     expired_str = account.expires_at.strftime("%Y-%m-%dT%H:%M:%S+08:00") if account.expires_at else ""
     if account.access_token and not expired_str:
         payload = _decode_jwt_payload(account.access_token)
@@ -275,8 +297,11 @@ def generate_token_json(account: Account) -> dict:
         "id_token": effective_id_token,
         "account_id": resolved_account_id,
         "access_token": account.access_token or "",
+        "session_token": account.session_token or "",
         "last_refresh": account.last_refresh.strftime("%Y-%m-%dT%H:%M:%S+08:00") if account.last_refresh else datetime.now(tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00"),
         "refresh_token": account.refresh_token or "",
+        "plan_type": plan_type,
+        "chatgpt_plan_type": plan_type,
     }
 
 

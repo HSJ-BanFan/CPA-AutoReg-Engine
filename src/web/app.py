@@ -4,10 +4,8 @@ FastAPI 应用主文件
 """
 
 import logging
-import sys
 import secrets
-import hmac
-import hashlib
+import sys
 from typing import Optional
 from pathlib import Path
 
@@ -19,6 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..app_meta import APP_NAME, APP_VERSION, display_name
 from ..config.settings import get_settings
+from .auth import WEBUI_AUTH_MAX_AGE_SECONDS, is_webui_authenticated, webui_auth_token
 from .routes import api_router
 from .routes.websocket import router as ws_router
 from .routes.cliproxy import auto_patrol_manager
@@ -64,7 +63,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -97,15 +96,6 @@ def create_app() -> FastAPI:
     templates.env.globals["app_version"] = APP_VERSION
     templates.env.globals["app_display_name"] = display_name()
 
-    def _auth_token(password: str) -> str:
-        secret = get_settings().webui_secret_key.get_secret_value().encode("utf-8")
-        return hmac.new(secret, password.encode("utf-8"), hashlib.sha256).hexdigest()
-
-    def _is_authenticated(request: Request) -> bool:
-        cookie = request.cookies.get("webui_auth")
-        expected = _auth_token(get_settings().webui_access_password.get_secret_value())
-        return bool(cookie) and secrets.compare_digest(cookie, expected)
-
     def _redirect_to_login(request: Request) -> RedirectResponse:
         return RedirectResponse(url=f"/login?next={request.url.path}", status_code=302)
 
@@ -131,7 +121,14 @@ def create_app() -> FastAPI:
             )
 
         response = RedirectResponse(url=next or "/", status_code=302)
-        response.set_cookie("webui_auth", _auth_token(expected), httponly=True, samesite="lax")
+        response.set_cookie(
+            "webui_auth",
+            webui_auth_token(expected),
+            max_age=WEBUI_AUTH_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=request.url.scheme == "https",
+            samesite="lax",
+        )
         return response
 
     @app.get("/logout")
@@ -144,41 +141,43 @@ def create_app() -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
         """首页 - 注册页面"""
-        if not _is_authenticated(request):
+        if not is_webui_authenticated(request):
             return _redirect_to_login(request)
         return templates.TemplateResponse(request=request, name="index.html", context={"request": request})
 
     @app.get("/accounts", response_class=HTMLResponse)
     async def accounts_page(request: Request):
         """账号管理页面"""
-        if not _is_authenticated(request):
+        if not is_webui_authenticated(request):
             return _redirect_to_login(request)
         return templates.TemplateResponse(request=request, name="accounts.html", context={"request": request})
 
     @app.get("/email-services", response_class=HTMLResponse)
     async def email_services_page(request: Request):
         """邮箱服务管理页面"""
-        if not _is_authenticated(request):
+        if not is_webui_authenticated(request):
             return _redirect_to_login(request)
         return templates.TemplateResponse(request=request, name="email_services.html", context={"request": request})
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
         """设置页面"""
-        if not _is_authenticated(request):
+        if not is_webui_authenticated(request):
             return _redirect_to_login(request)
         return templates.TemplateResponse(request=request, name="settings.html", context={"request": request})
 
     @app.get("/cliproxy-cleaner", response_class=HTMLResponse)
     async def cliproxy_cleaner_page(request: Request):
         """Cliproxy 账号清理页面"""
-        if not _is_authenticated(request):
+        if not is_webui_authenticated(request):
             return _redirect_to_login(request)
         return templates.TemplateResponse(request=request, name="cliproxy.html", context={"request": request})
 
     @app.get("/payment", response_class=HTMLResponse)
     async def payment_page(request: Request):
         """支付页面"""
+        if not is_webui_authenticated(request):
+            return _redirect_to_login(request)
         return templates.TemplateResponse(request=request, name="payment.html", context={"request": request})
 
     @app.on_event("startup")

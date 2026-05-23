@@ -5,7 +5,7 @@ V2 registration engine.
 import inspect
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config.settings import get_settings
@@ -22,6 +22,26 @@ from .openai.chatgpt_flow_utils import (
 
 logger = logging.getLogger(__name__)
 
+MIN_VERIFICATION_TIMEOUT = 1
+MAX_VERIFICATION_TIMEOUT = 180
+
+
+def _parse_verification_timeout(value: Any) -> int:
+    try:
+        configured_timeout = int(value)
+    except (TypeError, ValueError):
+        configured_timeout = 30
+    return min(MAX_VERIFICATION_TIMEOUT, max(MIN_VERIFICATION_TIMEOUT, configured_timeout))
+
+
+def _parse_session_expires_at(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
 
 class EmailServiceAdapter:
     """Adapt project email services to the V2 state machine."""
@@ -37,6 +57,9 @@ class EmailServiceAdapter:
         self.email_info = email_info or {}
         self.log_fn = log_fn
         self.check_cancelled = check_cancelled or (lambda: False)
+        self.verification_timeout = _parse_verification_timeout(
+            (getattr(self.email_service, "config", {}) or {}).get("timeout", 30)
+        )
         self._used_codes = set()
         self._signature = inspect.signature(self.email_service.get_verification_code)
 
@@ -68,7 +91,7 @@ class EmailServiceAdapter:
             code = self.email_service.get_verification_code(**kwargs)
             if code:
                 self._used_codes.add(code)
-                self.log_fn(f"成功获取验证码: {code}")
+                self.log_fn("成功获取验证码")
                 return code
 
             elapsed = int(time.time() - started)
@@ -135,13 +158,15 @@ class RegistrationEngineV2:
 
     def _should_retry(self, message: str) -> bool:
         text = str(message or "").lower()
+        if "registration_disallowed" in text:
+            return False
+
         retriable_markers = [
             "tls",
             "ssl",
             "curl: (35)",
             "预授权被拦截",
             "authorize",
-            "registration_disallowed",
             "http 400",
             "创建账号失败",
             "未获取到 authorization code",
@@ -154,6 +179,15 @@ class RegistrationEngineV2:
             "accesstoken",
             "next-auth",
         ]
+        if self.browser_mode == "camoufox":
+            retriable_markers.extend([
+                "timeout",
+                "navigation",
+                "selector",
+                "element not found",
+                "cloudflare",
+                "challenge",
+            ])
         return any(marker in text for marker in retriable_markers)
 
     def _log_client_message(self, message: str):
@@ -165,7 +199,28 @@ class RegistrationEngineV2:
         mapped = None
         level = "info"
 
-        if text == "访问 ChatGPT 首页...":
+        if text.startswith("正在启动 Camoufox"):
+            mapped = "[系统] 正在启动浏览器引擎..."
+        elif text == "Camoufox 浏览器已启动":
+            mapped = "[系统] 浏览器引擎就绪"
+        elif text == "进入注册页面...":
+            mapped = "[阶段 2] 正在初始化浏览器授权会话..."
+        elif text.startswith("设置账号密码"):
+            mapped = "[阶段 3] 正在配置账号凭据..."
+        elif text == "触发发送验证码...":
+            mapped = "[阶段 4] 正在分发验证码..."
+        elif text == "等待邮箱验证码...":
+            mapped = "[阶段 5] 正在同步邮箱数据..."
+        elif text.startswith("验证 OTP 码:"):
+            mapped = "[阶段 6] 正在核验身份信息..."
+        elif text == "等待注册完成...":
+            mapped = "[阶段 7] 正在完成账户配置..."
+        elif text == "注册流程完成":
+            mapped = "注册主流程已完成"
+        elif text.startswith("浏览器自动化失败"):
+            mapped = text
+            level = "error"
+        elif text == "访问 ChatGPT 首页...":
             mapped = "[阶段 2] 正在初始化授权会话..."
         elif text == "获取 CSRF token...":
             mapped = "[阶段 2] 正在获取授权上下文..."
@@ -191,7 +246,7 @@ class RegistrationEngineV2:
             mapped = "[阶段 4] 正在分发验证码..."
         elif text == "等待邮箱验证码...":
             mapped = "[阶段 5] 正在同步邮箱数据..."
-        elif text.startswith("验证 OTP 码:"):
+        elif text.startswith("验证 OTP 码"):
             mapped = "[阶段 6] 正在核验身份信息..."
         elif text.startswith("验证成功"):
             mapped = "身份核验完成"
@@ -251,7 +306,7 @@ class RegistrationEngineV2:
             self._raise_if_cancelled()
             self._log(f"正在准备 {self.email_service.service_type.value} 邮箱账户...")
             self.email_info = self.email_service.create_email()
-            resolved_email = self.email or ((self.email_info or {}).get("email"))
+            resolved_email = (self.email_info or {}).get("email") or self.email
             if not resolved_email:
                 self._log("邮箱创建失败: 返回信息不完整", "error")
                 return False
@@ -301,12 +356,20 @@ class RegistrationEngineV2:
                         self._log,
                         check_cancelled=self.check_cancelled,
                     )
-                    client = ChatGPTClient(
-                        proxy=self.proxy_url,
-                        verbose=False,
-                        browser_mode=self.browser_mode,
-                    )
-                    client._log = self._log_client_message
+                    if self.browser_mode == "camoufox":
+                        from .openai.chatgpt_browser_client import ChatGPTBrowserClient
+                        client = ChatGPTBrowserClient(
+                            proxy=self.proxy_url,
+                            headless=True,
+                        )
+                        client._log = self._log_client_message
+                    else:
+                        client = ChatGPTClient(
+                            proxy=self.proxy_url,
+                            verbose=False,
+                            browser_mode=self.browser_mode,
+                        )
+                        client._log = self._log_client_message
 
                     success, msg = client.register_complete_flow(
                         result.email,
@@ -332,7 +395,12 @@ class RegistrationEngineV2:
                         self._raise_if_cancelled()
                         result.success = True
                         result.access_token = session_result.get("access_token", "")
+                        result.refresh_token = session_result.get("refresh_token", "")
+                        result.id_token = session_result.get("id_token", "")
                         result.session_token = session_result.get("session_token", "")
+                        result.expires_at = _parse_session_expires_at(session_result.get("expires"))
+                        refresh_tz = result.expires_at.tzinfo if result.expires_at else timezone.utc
+                        result.last_refresh = datetime.now(refresh_tz or timezone.utc)
                         result.account_id = (
                             session_result.get("account_id")
                             or session_result.get("user_id")
@@ -407,6 +475,8 @@ class RegistrationEngineV2:
                     refresh_token=result.refresh_token,
                     id_token=result.id_token,
                     proxy_used=self.proxy_url,
+                    expires_at=result.expires_at,
+                    last_refresh=result.last_refresh,
                     extra_data=result.metadata,
                     source=result.source,
                 )

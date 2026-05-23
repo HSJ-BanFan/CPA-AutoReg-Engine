@@ -11,6 +11,8 @@ import uuid
 
 from typing import Optional
 
+from .browser_utils import build_playwright_proxy_config
+
 
 class SentinelTokenGenerator:
     """Pure Python generator for openai-sentinel-token."""
@@ -149,6 +151,82 @@ def fetch_sentinel_challenge(
     except Exception:
         pass
     return None
+
+
+def build_browser_sentinel_token(
+    *,
+    flow: str,
+    proxy: Optional[str] = None,
+    page_url: Optional[str] = None,
+    headless: bool = True,
+    device_id: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    timeout_ms: int = 45000,
+) -> Optional[str]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return None
+
+    target_url = page_url or "https://auth.openai.com/about-you"
+    launch_args = {
+        "headless": headless,
+        "args": [
+            "--no-sandbox",
+            "--disable-blink-features=AutomationControlled",
+        ],
+    }
+    proxy_config = build_playwright_proxy_config(proxy)
+    if proxy_config:
+        launch_args["proxy"] = proxy_config
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(**launch_args)
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1440, "height": 900},
+                    user_agent=user_agent,
+                    ignore_https_errors=True,
+                )
+                if device_id:
+                    context.add_cookies([
+                        {
+                            "name": "oai-did",
+                            "value": str(device_id),
+                            "domain": domain,
+                            "path": "/",
+                            "secure": True,
+                            "sameSite": "Lax",
+                        }
+                        for domain in ("auth.openai.com", "chatgpt.com")
+                    ])
+                page = context.new_page()
+                page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                page.wait_for_function(
+                    "() => typeof window.SentinelSDK !== 'undefined' && typeof window.SentinelSDK.token === 'function'",
+                    timeout=min(timeout_ms, 15000),
+                )
+                result = page.evaluate(
+                    """
+                    async ({ flow }) => {
+                        try {
+                            const token = await window.SentinelSDK.token(flow);
+                            return { success: true, token };
+                        } catch (error) {
+                            return { success: false, error: String(error && error.message || error) };
+                        }
+                    }
+                    """,
+                    {"flow": flow},
+                )
+                if isinstance(result, dict) and result.get("success") and result.get("token"):
+                    return str(result["token"]).strip() or None
+                return None
+            finally:
+                browser.close()
+    except Exception:
+        return None
 
 
 def build_sentinel_token(

@@ -29,6 +29,7 @@ def create_account(
     id_token: Optional[str] = None,
     proxy_used: Optional[str] = None,
     expires_at: Optional['datetime'] = None,
+    last_refresh: Optional['datetime'] = None,
     extra_data: Optional[Dict[str, Any]] = None,
     status: Optional[str] = None,
     source: Optional[str] = None
@@ -48,6 +49,7 @@ def create_account(
         id_token=id_token,
         proxy_used=proxy_used,
         expires_at=expires_at,
+        last_refresh=last_refresh,
         extra_data=extra_data or {},
         status=status or 'active',
         source=source or 'register',
