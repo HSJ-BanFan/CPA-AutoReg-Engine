@@ -3,11 +3,15 @@ V2 registration engine.
 """
 
 import inspect
+import json
 import logging
+import subprocess
+import sys
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..config.constants import EmailServiceType
 from ..config.settings import get_settings
 from ..database import crud
 from ..database.session import get_db
@@ -24,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 MIN_VERIFICATION_TIMEOUT = 1
 MAX_VERIFICATION_TIMEOUT = 180
+CAMOUFOX_SUBPROCESS_TIMEOUT_BUFFER = 300
 
 
 def _parse_verification_timeout(value: Any) -> int:
@@ -41,6 +46,58 @@ def _parse_session_expires_at(value: Any) -> Optional[datetime]:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _run_camoufox_registration_subprocess(
+    payload: Dict[str, Any],
+    log_client_message: Callable[[str], None],
+    log_engine_message: Callable[[str], None],
+    timeout: int,
+) -> Tuple[bool, str, bool, Dict[str, Any]]:
+    command = [sys.executable, "-m", "src.core.camoufox_registration_worker"]
+    try:
+        completed = subprocess.run(
+            command,
+            input=json.dumps(payload, ensure_ascii=False, default=str),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Camoufox 子进程超时", False, {}
+    except Exception as exc:
+        return False, f"Camoufox 子进程启动失败: {exc.__class__.__name__}", False, {}
+
+    result_payload = None
+    for line in (completed.stdout or "").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "log":
+            message = str(event.get("message") or "")
+            if event.get("source") == "client":
+                log_client_message(message)
+            else:
+                log_engine_message(message)
+        elif event.get("type") == "result":
+            result_payload = event
+
+    if not result_payload:
+        return False, "Camoufox 子进程未返回结果", False, {}
+
+    session_result = result_payload.get("session_result")
+    if not isinstance(session_result, dict):
+        session_result = {}
+    return (
+        bool(result_payload.get("success")),
+        str(result_payload.get("message") or ""),
+        bool(result_payload.get("session_ok")),
+        session_result,
+    )
 
 
 class EmailServiceAdapter:
@@ -357,12 +414,34 @@ class RegistrationEngineV2:
                         check_cancelled=self.check_cancelled,
                     )
                     if self.browser_mode == "camoufox":
-                        from .openai.chatgpt_browser_client import ChatGPTBrowserClient
-                        client = ChatGPTBrowserClient(
-                            proxy=self.proxy_url,
-                            headless=True,
+                        email_config = getattr(self.email_service, "config", {}) or {}
+
+                        # Pack email service internal state for the isolated worker
+                        internal_state = {}
+                        if self.email_service.service_type == EmailServiceType.CLOUDFLARE_TEMP_EMAIL:
+                            # Safely extract internal state if it exists
+                            created_emails = getattr(self.email_service, "_created_emails", {})
+                            if self.email in created_emails:
+                                internal_state["cf_email_state"] = created_emails[self.email]
+
+                        payload = {
+                            "email": result.email,
+                            "password": pwd,
+                            "first_name": first_name,
+                            "last_name": last_name,
+                            "birthdate": birthdate,
+                            "proxy_url": self.proxy_url,
+                            "email_service_type": self.email_service.service_type.value,
+                            "email_service_config": email_config,
+                            "email_info": self.email_info or {},
+                            "email_internal_state": internal_state,
+                        }
+                        success, msg, session_ok, session_result = _run_camoufox_registration_subprocess(
+                            payload,
+                            self._log_client_message,
+                            self._log,
+                            email_adapter.verification_timeout + CAMOUFOX_SUBPROCESS_TIMEOUT_BUFFER,
                         )
-                        client._log = self._log_client_message
                     else:
                         client = ChatGPTClient(
                             proxy=self.proxy_url,
@@ -370,15 +449,22 @@ class RegistrationEngineV2:
                             browser_mode=self.browser_mode,
                         )
                         client._log = self._log_client_message
+                        success, msg = client.register_complete_flow(
+                            result.email,
+                            pwd,
+                            first_name,
+                            last_name,
+                            birthdate,
+                            email_adapter,
+                        )
+                        self._raise_if_cancelled()
+                        session_ok = False
+                        session_result = {}
+                        if success:
+                            self._log("[阶段 8] 正在同步账户访问令牌...")
+                            self._raise_if_cancelled()
+                            session_ok, session_result = client.reuse_session_and_get_tokens()
 
-                    success, msg = client.register_complete_flow(
-                        result.email,
-                        pwd,
-                        first_name,
-                        last_name,
-                        birthdate,
-                        email_adapter,
-                    )
                     self._raise_if_cancelled()
                     if not success:
                         last_error = f"注册流失败: {msg}"
@@ -387,10 +473,6 @@ class RegistrationEngineV2:
                             continue
                         result.error_message = last_error
                         return result
-
-                    self._log("[阶段 8] 正在同步账户访问令牌...")
-                    self._raise_if_cancelled()
-                    session_ok, session_result = client.reuse_session_and_get_tokens()
                     if session_ok:
                         self._raise_if_cancelled()
                         result.success = True
@@ -401,10 +483,11 @@ class RegistrationEngineV2:
                         result.expires_at = _parse_session_expires_at(session_result.get("expires"))
                         refresh_tz = result.expires_at.tzinfo if result.expires_at else timezone.utc
                         result.last_refresh = datetime.now(refresh_tz or timezone.utc)
+                        device_id = str(session_result.get("device_id", ""))
                         result.account_id = (
                             session_result.get("account_id")
                             or session_result.get("user_id")
-                            or ("v2_acct_" + client.device_id[:8])
+                            or ("v2_acct_" + device_id[:8])
                         )
                         result.workspace_id = session_result.get("workspace_id", "")
                         result.source = "register"
@@ -454,6 +537,22 @@ class RegistrationEngineV2:
             result.error_message = str(e)
             return result
 
+    def _push_to_webchat2api(self, result: RegistrationResult, settings) -> None:
+        if not getattr(settings, "webchat2api_enabled", False):
+            return
+        try:
+            from .upload.webchat2api_upload import push_registration_to_webchat2api
+
+            api_token = settings.webchat2api_api_token.get_secret_value()
+            success, message = push_registration_to_webchat2api(
+                result,
+                base_url=settings.webchat2api_base_url,
+                api_token=api_token,
+            )
+            self._log(message, "success" if success else "warning")
+        except Exception as e:
+            self._log(f"webchat2api 推送失败: {e}", "warning")
+
     def save_to_database(self, result: RegistrationResult) -> bool:
         """Persist registration result in the current project's schema."""
         if not result.success:
@@ -480,8 +579,10 @@ class RegistrationEngineV2:
                     extra_data=result.metadata,
                     source=result.source,
                 )
-                self._log(f"数据持久化操作完成. 数据库 ID: {account.id}")
-                return True
+                database_id = account.id
+            self._log(f"数据持久化操作完成. 数据库 ID: {database_id}")
+            self._push_to_webchat2api(result, settings)
+            return True
         except Exception as e:
             self._log(f"保存到数据库失败: {e}", "error")
             return False

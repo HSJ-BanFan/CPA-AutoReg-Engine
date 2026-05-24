@@ -350,6 +350,27 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         is_secret=True
     ),
 
+    # webchat2api 推送配置
+    "webchat2api_enabled": SettingDefinition(
+        db_key="webchat2api.enabled",
+        default_value=True,
+        category=SettingCategory.GENERAL,
+        description="注册成功后是否自动推送到 webchat2api"
+    ),
+    "webchat2api_base_url": SettingDefinition(
+        db_key="webchat2api.base_url",
+        default_value="http://127.0.0.1:19000",
+        category=SettingCategory.GENERAL,
+        description="webchat2api 服务地址"
+    ),
+    "webchat2api_api_token": SettingDefinition(
+        db_key="webchat2api.api_token",
+        default_value="admin",
+        category=SettingCategory.GENERAL,
+        description="webchat2api 管理员 Token",
+        is_secret=True
+    ),
+
     # 验证码配置
     "email_code_timeout": SettingDefinition(
         db_key="email_code.timeout",
@@ -388,6 +409,7 @@ SETTING_TYPES: Dict[str, Type] = {
     "tempmail_max_retries": int,
     "tm_enabled": bool,
     "cpa_enabled": bool,
+    "webchat2api_enabled": bool,
     "email_code_timeout": int,
     "email_code_poll_interval": int,
 }
@@ -711,6 +733,11 @@ class Settings(BaseModel):
     cpa_enabled: bool = False
     cpa_api_url: str = ""
     cpa_api_token: SecretStr = SecretStr("")
+
+    # webchat2api 推送配置
+    webchat2api_enabled: bool = True
+    webchat2api_base_url: str = "http://127.0.0.1:19000"
+    webchat2api_api_token: SecretStr = SecretStr("admin")
 
     # 验证码配置
     email_code_timeout: int = 30

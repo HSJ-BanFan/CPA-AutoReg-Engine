@@ -6,7 +6,6 @@ _launch_browser must use __enter__ to obtain the real Browser object
 before calling new_context() on it.
 """
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -62,18 +61,6 @@ class TestLaunchBrowser:
 
         client = ChatGPTBrowserClient()
 
-        with patch(
-            "src.core.openai.chatgpt_browser_client.Camoufox",
-            create=True,
-        ) as MockCamoufox:
-            # When the module does `from camoufox.sync_api import Camoufox`
-            # we need to patch the name used inside _launch_browser.
-            # The import happens inside the method body, so patch at module level
-            # won't work. Instead patch the import target directly.
-            pass
-
-        # Patch at the point of use: the from-import inside _launch_browser.
-        # We patch camoufox.sync_api.Camoufox so the local name resolves.
         with patch("camoufox.sync_api.Camoufox", return_value=fake_camoufox):
             client._launch_browser()
 
@@ -103,12 +90,6 @@ class TestLaunchBrowser:
         with patch("camoufox.sync_api.Camoufox", return_value=fake_camoufox):
             client._launch_browser()
 
-        # Verify proxy was passed to Camoufox constructor
-        constructor_call = fake_camoufox  # return_value of Camoufox()
-        # Camoufox() was called with proxy kwarg
-        call_kwargs = fake_camoufox  # the mock is the return value
-
-        # Verify new_context received proxy
         ctx_kwargs = fake_browser.new_context.call_args
         assert ctx_kwargs is not None
 
@@ -169,6 +150,46 @@ class TestLaunchBrowserEdgeCases:
         assert "oai-did" in cookie_names
         for c in cookies_arg:
             assert c["value"] == client.device_id
+
+
+class TestTokenExtraction:
+    def test_extract_tokens_uses_context_request_without_page_navigation(self):
+        client = ChatGPTBrowserClient()
+        response = MagicMock()
+        response.json.return_value = {
+            "accessToken": "access-token",
+            "refreshToken": "refresh-token",
+            "idToken": "id-token",
+            "expires": "2026-05-26T10:00:00Z",
+            "authProvider": "auth-provider",
+            "user": {"id": "user-123"},
+            "account": {"id": "account-123"},
+        }
+        request = MagicMock()
+        request.get.return_value = response
+        context = MagicMock()
+        context.request = request
+        context.cookies.return_value = [
+            {"name": "__Secure-next-auth.session-token", "value": "session-token"},
+        ]
+        page = MagicMock()
+        client._context = context
+        client._page = page
+
+        tokens = client._extract_tokens_from_browser()
+
+        request.get.assert_called_once_with(
+            "https://chatgpt.com/api/auth/session",
+            timeout=45000,
+        )
+        page.goto.assert_not_called()
+        assert tokens["access_token"] == "access-token"
+        assert tokens["refresh_token"] == "refresh-token"
+        assert tokens["id_token"] == "id-token"
+        assert tokens["session_token"] == "session-token"
+        assert tokens["user_id"] == "user-123"
+        assert tokens["account_id"] == "user-123"
+        assert tokens["raw_session"]["accessToken"] == "access-token"
 
 
 class TestEmailVerificationStep:

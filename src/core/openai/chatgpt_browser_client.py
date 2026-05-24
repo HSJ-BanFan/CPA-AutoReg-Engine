@@ -6,7 +6,6 @@ web UI registration flow — form filling, button clicks, OTP entry — instead
 of raw HTTP API calls.
 """
 
-import json
 import time
 import uuid
 from datetime import date
@@ -527,13 +526,11 @@ class ChatGPTBrowserClient:
     # ------------------------------------------------------------------
 
     def _extract_tokens_from_browser(self) -> dict:
-        self._page.goto(
+        response = self._context.request.get(
             f"{CHATGPT_BASE}/api/auth/session",
-            wait_until="domcontentloaded",
             timeout=PAGE_LOAD_TIMEOUT,
         )
-        body_text = self._page.evaluate("() => document.body.innerText")
-        session_data = json.loads(body_text)
+        session_data = response.json()
         cookies = self._context.cookies()
         cookie_map = {c["name"]: c["value"] for c in cookies}
         session_token = cookie_map.get("__Secure-next-auth.session-token", "")

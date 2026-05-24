@@ -1,6 +1,6 @@
 <div align="center">
 
-# CPA-Codex-Manager
+# CPA-AutoReg-Engine
 ---
 <img src="https://github.com/user-attachments/assets/4106fb61-5359-4d05-b666-9aa3e6e7a0f3" width="200" />
 
@@ -15,9 +15,14 @@
 
 ## 核心特性
 
+- **高级指纹伪装与风控对抗**：
+  - **Camoufox 真实浏览器隔离引擎**：采用底层级浏览器指纹伪装（涵盖 WebGL、Canvas、WebRTC），直接通过 Web UI 模拟人类自动化注册，完全绕过仅基于 HTTP 协议的 API 风控检测。
+  - **子进程沙盒**：浏览器注册任务隔离在独立子进程中运行，彻底解决浏览器核心崩溃导致主服务假死的问题。
 - **多模式并发注册**：
   - **并行模式**：支持最高 50 线程同时发起 1000 条注册任务，极速扩充账号规模。
   - **流水线模式**：支持设置随机启动间隔，模拟真实用户行为，规避风控。
+- **无缝对接下游号池 (webchat2api)**：
+  - 注册成功的账号及其完整 Session/Token 能够自动推送到下游的 `webchat2api` 或对应的账号管理网关，实现打码、注册、入池的全自动闭环。
 - **CLIProxyAPI 账号自动巡检**：
   - 支持 **401 认证失效检测** 与 **Quota 额度耗尽检测**。
   - 自动根据配置执行 **物理删除** 异常账号，保持账号池可用性。
@@ -109,10 +114,10 @@ OpenAI 注册通常需要可访问 OpenAI/Auth 域名的代理。进入「设置
 
 ### 第三步：配置邮箱服务
 
-推荐二选一：
+推荐使用以下两种方式之一：
 
-- 有域名但不想自建临时邮箱：用 Cloudflare Email Routing 转发到 Gmail，再配置 `imap_mail`。
-- 已部署自建 Cloudflare Temp Email：用 `cloudflare_temp_email`。
+- **IMAP 模式（首选）**：有域名但不想自建临时邮箱：用 Cloudflare Email Routing 转发到 Gmail，再配置 `imap_mail`。此方式稳定性高，适合批量注册。
+- **Cloudflare Temp Email**：已部署自建 Cloudflare Temp Email，并绑定了未被风控的高质量独立域名：用 `cloudflare_temp_email`。
 
 如果选择 Gmail 转发方案，流程是：
 
@@ -219,7 +224,7 @@ tmpxxxx@example.com
 → Cloudflare Email Routing
 → your-gmail@gmail.com
 → Gmail IMAP
-→ CPA-Codex-Manager 读取验证码
+→ CPA-AutoReg-Engine 读取验证码
 ```
 
 #### 1. Cloudflare 侧配置
@@ -239,7 +244,7 @@ tmpxxxx@example.com
 3. 确认 Gmail 已启用 IMAP。
 4. 本项目里填写应用专用密码，不要填写 Google 登录密码。
 
-#### 3. CPA-Codex-Manager 侧配置
+#### 3. CPA-AutoReg-Engine 侧配置
 
 在「邮箱服务」中新增服务：
 
@@ -300,13 +305,16 @@ tmpxxxx@example.com
 
 ### 邮箱配置：Cloudflare Temp Email
 
+> **📌 提示**
+> 使用 Cloudflare Temp Email 时，建议绑定高质量的独立域名。如果使用免费或泛滥后缀的域名，可能会收不到 OpenAI 发送的验证码。
+
 Cloudflare Temp Email 指自建的 Cloudflare 临时邮箱服务，不是 Cloudflare Email Routing 原生面板功能。该服务需要先部署好，并能通过 HTTP API 创建邮箱和读取邮件。
 
 本项目当前适配的自建服务 API 来自开源项目：
 
 - 项目地址：https://github.com/dreamhunter2333/cloudflare_temp_email
 
-请先按该开源项目文档完成部署、域名/MX/Cloudflare 配置；CPA-Codex-Manager 侧只需要填写部署后的 `base_url` 和收信 `domain`。
+请先按该开源项目文档完成部署、域名/MX/Cloudflare 配置；CPA-AutoReg-Engine 侧只需要填写部署后的 `base_url` 和收信 `domain`。
 
 #### 完整配置步骤
 
@@ -417,41 +425,39 @@ Authorization: Bearer <runtime-mailbox-jwt>
 
 ## OpenAI 注册链路排障
 
-### 成功日志参考
+### 浏览器注册失败与风控
 
-成功链路应包含这些关键日志：
+当前使用最新的 **Camoufox 真实浏览器** 自动化引擎来绕过协议层检测。如果出现失败，常见原因为：
 
-```text
-验证码验证状态: 200
-客户端认证会话转储状态: 200
-客户端认证会话转储字段: ['checksum', 'client_auth_session', 'session_id']
-客户端认证会话存在: True
-客户端认证会话包含 session_id: True
-身份核验完成
-账户配置完成
-注册主流程已完成
-访问令牌同步完成
-注册: 流程执行成功
-```
+#### 1. `未打开注册入口` 或 `未找到邮箱输入框`
 
-### 常见问题与处理
+原因：
+- OpenAI 的注册页面结构发生变化。
+- 代理 IP 被列入高风险，导致页面直接弹 Cloudflare 验证码且无法通过，没有展示"Sign up"。
+- Camoufox 实例初始化慢，导致页面元素加载超时。
 
-#### 1. `ERR_CONNECTION_REFUSED`
+处理：
+- 检查代理 IP 纯净度（更换节点）。
+- 检查服务器资源（Camoufox 需较多内存，推荐至少 2GB 可用内存）。
 
-原因：Web UI 未启动、端口错误，或进程已退出。
+#### 2. `未收到验证码` 或 `验证码被拒绝`
 
-处理：重新启动 Web UI，并确认访问端口与启动端口一致。
+原因：
+- 邮箱被风控：公共临时邮箱（如 TempMail）及部分免费/泛滥的 Cloudflare Temp Email 自建域名被拦截，OpenAI 显示发了邮件但后台不会真实下发（静默拦截）。
+- IMAP 邮箱：发件人可能被归类到垃圾邮件。
+- 网络延迟导致邮件还没到达。
 
-#### 2. `HTTP 409 invalid_state`
+处理：
+- 强烈建议换用优质独立域名结合 Cloudflare Email Routing 转发至 Gmail，并使用 `imap_mail`。
+- 如果用 IMAP，检查 Gmail 的垃圾邮件箱。
 
-原因：OpenAI Auth 注册状态链不一致，常见于客户端没有按浏览器流程持久化 `oai-client-auth-session`。
+### 旧版 HTTP 协议注册失败参考（API 模式）
 
-处理：确认当前版本已使用浏览器对齐流程：
+#### 1. `HTTP 409 invalid_state`
 
-- 发送验证码使用 `POST /api/accounts/email-otp/resend`
-- 验证 OTP 后调用 `GET /api/accounts/client_auth_session_dump`
-- 兼容 dump 返回的 `client_auth_session + session_id + checksum` 结构
-- `client_auth_session_dump` 后下一状态应进入 `/about-you`，不能停在 dump API URL
+原因：OpenAI Auth 注册状态链不一致，常见于客户端没有按预期流程持久化会话。
+
+处理：重试，或检查代理 IP。
 
 #### 3. `发送验证码响应缺少客户端认证会话`
 
@@ -495,6 +501,17 @@ Authorization: Bearer <runtime-mailbox-jwt>
 
 排障日志只记录 HTTP 状态、字段名和布尔值，不记录验证码、JWT、session、cookie 或邮箱密码。
 
+## Webchat2API 自动推送与闭环
+
+注册成功的账号，其所有的 Session Token、Access Token 及其设备信息均会自动推送到后端的 `webchat2api`（或其他兼容网关）进行持久化，完成自动入池。
+
+在 `.env` 或「系统设置」中可配置：
+- `WEBCHAT2API_ENABLED`：是否开启推送（默认 `True`）
+- `WEBCHAT2API_BASE_URL`：推送目标服务地址（默认 `http://127.0.0.1:19000`）
+- `WEBCHAT2API_API_TOKEN`：推送鉴权管理 Token（默认 `admin`）
+
+推送成功后会在控制台或日志中打印 `成功上传账号到 webchat2api`。如果目标服务没有响应，系统将产生 Timeout 异常并在日志中打印（不影响已注册账号写入 SQLite 本地库）。
+
 ## 部署配置
 
 ### 本地运行
@@ -518,15 +535,15 @@ http://127.0.0.1:8001/login
 适合长期运行。先准备持久化目录：
 
 ```bash
-mkdir -p ~/CPA-Codex-Manager
-cd ~/CPA-Codex-Manager
+mkdir -p ~/CPA-AutoReg-Engine
+cd ~/CPA-AutoReg-Engine
 mkdir -p data logs
 ```
 
 #### 从 GitHub 直接拉取 compose 示例
 
 ```bash
-curl -O https://raw.githubusercontent.com/Maoleio/CPA-Codex-Manager/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/Maoleio/CPA-AutoReg-Engine/main/docker-compose.yml
 ```
 
 也可以直接创建 `docker-compose.yml`：
@@ -534,7 +551,7 @@ curl -O https://raw.githubusercontent.com/Maoleio/CPA-Codex-Manager/main/docker-
 ```yaml
 services:
   cpa-codex-manager:
-    image: maoleio/cpa-codex-manager:latest
+    image: HSJ-BanFan/CPA-AutoReg-Engine:latest
     container_name: cpa-codex-manager
     restart: unless-stopped
     ports:
@@ -628,8 +645,8 @@ chmod +x scripts/build_macos_dmg.sh
 
 打包完成后产物位于：
 
-- `dist/CPA-Codex-Manager.app`
-- `dist/CPA-Codex-Manager.dmg`
+- `dist/CPA-AutoReg-Engine.app`
+- `dist/CPA-AutoReg-Engine.dmg`
 
 
 ### Windows 桌面版打包
@@ -642,7 +659,7 @@ scripts\build_windows.bat
 
 打包完成后产物通常位于：
 
-- `dist\CPA-Codex-Manager\CPA-Codex-Manager.exe`
+- `dist\CPA-AutoReg-Engine\CPA-AutoReg-Engine.exe`
 
 
 
@@ -680,10 +697,14 @@ scripts\build_windows.bat
 ## Star History
 
 <p align="center">
-  <a href="https://www.star-history.com/#maoleio/CPA-Codex-Manager&Date">
-    <img src="https://api.star-history.com/svg?repos=maoleio/CPA-Codex-Manager&type=Date" alt="Star History Chart" />
+  <a href="https://www.star-history.com/#maoleio/CPA-AutoReg-Engine&Date">
+    <img src="https://api.star-history.com/svg?repos=maoleio/CPA-AutoReg-Engine&type=Date" alt="Star History Chart" />
   </a>
 </p>
 
+## 致谢 / Acknowledgements
+
+本项目基于 [CPA-Codex-Manager](https://github.com/Maoleio/CPA-Codex-Manager) 二次开发。感谢原作者 [Maoleio](https://github.com/Maoleio) 的开源贡献。
+
 ---
-**CPA-Codex-Manager** - 让 CLIProxyAPI 号池管理变得优雅而自动化。
+**CPA-AutoReg-Engine** - 让 CLIProxyAPI 号池管理变得优雅而自动化。
