@@ -503,7 +503,7 @@ Authorization: Bearer <runtime-mailbox-jwt>
 
 ## Webchat2API 自动推送与闭环
 
-注册成功的账号，其所有的 Session Token、Access Token 及其设备信息均会自动推送到后端的 `webchat2api`（或其他兼容网关）进行持久化，完成自动入池。
+注册成功的账号，其所有的 Session Token、Access Token 及其设备信息均会自动推送到后端的 [webchat2api](https://github.com/zqbxdev/webchat2api)（或其他兼容网关）进行持久化，完成自动入池。
 
 在 `.env` 或「系统设置」中可配置：
 - `WEBCHAT2API_ENABLED`：是否开启推送（默认 `True`）
