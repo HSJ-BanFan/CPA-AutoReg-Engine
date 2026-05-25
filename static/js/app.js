@@ -91,6 +91,7 @@ const elements = {
     autoUploadTm: document.getElementById('auto-upload-tm'),
     tmServiceSelectGroup: document.getElementById('tm-service-select-group'),
     tmServiceSelect: document.getElementById('tm-service-select'),
+    autoPushWebchat2api: document.getElementById('auto-push-webchat2api'),
     // 邮箱服务选择模态框
     emailServiceTrigger: document.getElementById('email-service-trigger'),
     emailServiceDisplay: document.getElementById('email-service-display'),
@@ -111,13 +112,20 @@ document.addEventListener('DOMContentLoaded', () => {
     startActiveTasksPolling();
 });
 
-// 初始化注册后自动操作选项（CPA / Sub2API / TM）
+// 初始化注册后自动操作选项（CPA / Sub2API / TM / webchat2api）
 async function initAutoUploadOptions() {
     await Promise.all([
         loadServiceSelect('/cpa-services?enabled=true', elements.cpaServiceSelect, elements.autoUploadCpa, elements.cpaServiceSelectGroup),
         loadServiceSelect('/sub2api-services?enabled=true', elements.sub2apiServiceSelect, elements.autoUploadSub2api, elements.sub2apiServiceSelectGroup),
         loadServiceSelect('/tm-services?enabled=true', elements.tmServiceSelect, elements.autoUploadTm, elements.tmServiceSelectGroup),
     ]);
+    // webchat2api: 从全局设置初始化勾选状态
+    if (elements.autoPushWebchat2api) {
+        try {
+            const settings = await api.get('/settings');
+            elements.autoPushWebchat2api.checked = settings.webchat2api?.enabled !== false;
+        } catch (e) { }
+    }
 }
 
 // 通用：构建自定义多选下拉组件并处理联动
@@ -498,6 +506,13 @@ async function handleStartRegistration(e) {
         auto_upload_tm: elements.autoUploadTm ? elements.autoUploadTm.checked : false,
         tm_service_ids: elements.autoUploadTm && elements.autoUploadTm.checked ? getSelectedServiceIds(elements.tmServiceSelect) : [],
     };
+
+    // 同步 webchat2api 推送开关到全局设置
+    if (elements.autoPushWebchat2api) {
+        try {
+            await api.post('/settings/webchat2api', { enabled: elements.autoPushWebchat2api.checked });
+        } catch (e) { }
+    }
 
     // 如果选择了数据库中的服务，传递 service_id
     if (serviceId && serviceId !== 'default') {

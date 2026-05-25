@@ -50,6 +50,7 @@ class RegistrationSettings(BaseModel):
     sleep_min: int = 5
     sleep_max: int = 30
     check_ip_location: bool = True
+    browser_mode: str = "protocol"
 
 
 class WebUISettings(BaseModel):
@@ -110,6 +111,11 @@ async def get_all_settings():
         "email_code": {
             "timeout": settings.email_code_timeout,
             "poll_interval": settings.email_code_poll_interval,
+        },
+        "webchat2api": {
+            "enabled": settings.webchat2api_enabled,
+            "base_url": settings.webchat2api_base_url,
+            "has_api_token": bool(settings.webchat2api_api_token and settings.webchat2api_api_token.get_secret_value()),
         },
     }
 
@@ -211,6 +217,7 @@ async def get_registration_settings():
         "sleep_min": settings.registration_sleep_min,
         "sleep_max": settings.registration_sleep_max,
         "check_ip_location": settings.registration_check_ip_location,
+        "browser_mode": settings.registration_browser_mode,
     }
 
 
@@ -224,6 +231,7 @@ async def update_registration_settings(request: RegistrationSettings):
         registration_sleep_min=request.sleep_min,
         registration_sleep_max=request.sleep_max,
         registration_check_ip_location=request.check_ip_location,
+        registration_browser_mode=request.browser_mode,
     )
 
     return {"success": True, "message": "注册设置已更新"}
@@ -244,6 +252,26 @@ async def update_webui_settings(request: WebUISettings):
 
     update_settings(**update_dict)
     return {"success": True, "message": "Web UI 设置已更新"}
+
+
+class Webchat2apiSettings(BaseModel):
+    """webchat2api 推送设置"""
+    enabled: bool = True
+    base_url: str = "http://127.0.0.1:19000"
+    api_token: Optional[str] = None
+
+
+@router.post("/webchat2api")
+async def update_webchat2api_settings(request: Webchat2apiSettings):
+    """更新 webchat2api 推送设置"""
+    update_dict = {
+        "webchat2api_enabled": request.enabled,
+        "webchat2api_base_url": request.base_url,
+    }
+    if request.api_token is not None:
+        update_dict["webchat2api_api_token"] = request.api_token
+    update_settings(**update_dict)
+    return {"success": True, "message": "webchat2api 设置已更新"}
 
 
 @router.get("/database")

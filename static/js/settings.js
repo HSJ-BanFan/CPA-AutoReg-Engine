@@ -207,6 +207,12 @@ function initEventListeners() {
     if (elements.cpaServiceForm) {
         elements.cpaServiceForm.addEventListener('submit', handleSaveCpaService);
     }
+
+    // webchat2api 设置表单
+    const webchat2apiForm = document.getElementById('webchat2api-settings-form');
+    if (webchat2apiForm) {
+        webchat2apiForm.addEventListener('submit', handleSaveWebchat2apiSettings);
+    }
 }
 
 // 加载设置
@@ -224,6 +230,7 @@ async function loadSettings() {
         document.getElementById('max-retries').value = data.registration?.max_retries || 3;
         document.getElementById('timeout').value = data.registration?.timeout || 120;
         document.getElementById('password-length').value = data.registration?.default_password_length || 12;
+        document.getElementById('browser-mode').value = data.registration?.browser_mode || 'protocol';
         document.getElementById('sleep-min').value = data.registration?.sleep_min || 5;
         document.getElementById('sleep-max').value = data.registration?.sleep_max || 30;
         document.getElementById('check-ip-location').checked = data.registration?.check_ip_location !== false;
@@ -240,6 +247,17 @@ async function loadSettings() {
             if (input) {
                 input.value = '';
                 input.placeholder = '已配置，留空保持不变';
+            }
+        }
+
+        // webchat2api 推送配置
+        if (data.webchat2api) {
+            document.getElementById('webchat2api-enabled').checked = data.webchat2api.enabled !== false;
+            document.getElementById('webchat2api-base-url').value = data.webchat2api.base_url || 'http://127.0.0.1:19000';
+            const tokenInput = document.getElementById('webchat2api-api-token');
+            if (tokenInput) {
+                tokenInput.value = '';
+                tokenInput.placeholder = data.webchat2api.has_api_token ? '已配置，留空保持不变' : '输入 API Token';
             }
         }
 
@@ -265,6 +283,32 @@ async function handleSaveWebuiSettings(e) {
     } catch (error) {
         console.error('保存 Web UI 设置失败:', error);
         toast.error('保存 Web UI 设置失败');
+    }
+}
+
+// 保存 webchat2api 设置
+async function handleSaveWebchat2apiSettings(e) {
+    e.preventDefault();
+
+    const tokenValue = document.getElementById('webchat2api-api-token').value;
+    const data = {
+        enabled: document.getElementById('webchat2api-enabled').checked,
+        base_url: document.getElementById('webchat2api-base-url').value,
+    };
+
+    if (tokenValue) {
+        data.api_token = tokenValue;
+    }
+
+    try {
+        await api.post('/settings/webchat2api', data);
+        toast.success('webchat2api 配置已保存');
+        if (tokenValue) {
+            document.getElementById('webchat2api-api-token').value = '';
+            document.getElementById('webchat2api-api-token').placeholder = '已配置，留空保持不变';
+        }
+    } catch (error) {
+        toast.error('保存失败: ' + error.message);
     }
 }
 
@@ -359,6 +403,7 @@ async function handleSaveRegistration(e) {
         max_retries: parseInt(document.getElementById('max-retries').value),
         timeout: parseInt(document.getElementById('timeout').value),
         default_password_length: parseInt(document.getElementById('password-length').value),
+        browser_mode: document.getElementById('browser-mode').value,
         sleep_min: parseInt(document.getElementById('sleep-min').value),
         sleep_max: parseInt(document.getElementById('sleep-max').value),
         check_ip_location: document.getElementById('check-ip-location').checked,

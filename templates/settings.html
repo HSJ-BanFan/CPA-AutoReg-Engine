@@ -194,6 +194,13 @@
                                             max="32">
                                     </div>
                                     <div class="form-group">
+                                        <label for="browser-mode">注册引擎模式</label>
+                                        <select id="browser-mode" name="browser_mode" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-card); color: var(--text-main);">
+                                            <option value="protocol">协议接口模式 (快且轻量)</option>
+                                            <option value="camoufox">浏览器绕过模式 (Camoufox 抗风控)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
                                         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                             <input type="checkbox" id="check-ip-location" name="check_ip_location" checked>
                                             <span>注册前检查 IP 归属地</span>
@@ -308,6 +315,37 @@
                                         <tbody id="cpa-services-table"></tbody>
                                     </table>
                                 </div>
+                            </div>
+                        </div>
+                        <div class="card" style="margin-top: 24px;">
+                            <div class="card-header">
+                                <h3>webchat2api 推送</h3>
+                            </div>
+                            <div class="card-body">
+                                <form id="webchat2api-settings-form">
+                                    <div class="form-group">
+                                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                            <input type="checkbox" id="webchat2api-enabled" checked>
+                                            <span style="font-size: 14px;">注册成功后自动推送到 webchat2api</span>
+                                        </label>
+                                        <small style="display: block; margin-top: 8px; color: var(--text-muted);">
+                                            启用后，注册成功的账号将自动推送至下游 webchat2api 号池服务
+                                        </small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="webchat2api-base-url">服务地址</label>
+                                        <input type="text" id="webchat2api-base-url"
+                                            placeholder="http://127.0.0.1:19000" value="http://127.0.0.1:19000">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="webchat2api-api-token">API Token</label>
+                                        <input type="password" id="webchat2api-api-token"
+                                            placeholder="输入 webchat2api 管理员 Token">
+                                    </div>
+                                    <div class="form-actions" style="margin-top: 24px; border: none; padding: 0;">
+                                        <button type="submit" class="btn btn-primary">保存 webchat2api 配置</button>
+                                    </div>
+                                </form>
                             </div>
                         </div>
                     </div>

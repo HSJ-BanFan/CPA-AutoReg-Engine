@@ -72,10 +72,14 @@ def _run_camoufox_registration_subprocess(
         return False, f"Camoufox 子进程启动失败: {exc.__class__.__name__}", False, {}
 
     result_payload = None
+    non_json_lines: List[str] = []
     for line in (completed.stdout or "").splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            stripped = line.strip()
+            if stripped:
+                non_json_lines.append(stripped)
             continue
         if event.get("type") == "log":
             message = str(event.get("message") or "")
@@ -87,7 +91,13 @@ def _run_camoufox_registration_subprocess(
             result_payload = event
 
     if not result_payload:
-        return False, "Camoufox 子进程未返回结果", False, {}
+        diagnostic = (completed.stdout or "").strip()
+        if len(diagnostic) > 2000:
+            diagnostic = diagnostic[-2000:]
+        error_msg = f"Camoufox 子进程未返回结果 (exit={completed.returncode})"
+        if non_json_lines:
+            error_msg += f"; 原始输出: {diagnostic[:500]}"
+        return False, error_msg, False, {}
 
     session_result = result_payload.get("session_result")
     if not isinstance(session_result, dict):

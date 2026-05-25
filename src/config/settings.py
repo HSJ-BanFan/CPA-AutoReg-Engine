@@ -255,6 +255,12 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.REGISTRATION,
         description="注册前是否检查 IP 地理位置"
     ),
+    "registration_browser_mode": SettingDefinition(
+        db_key="registration.browser_mode",
+        default_value="protocol",
+        category=SettingCategory.REGISTRATION,
+        description="注册浏览器引擎模式 (protocol / camoufox)"
+    ),
 
     # 邮箱服务配置
     "email_service_priority": SettingDefinition(
@@ -404,6 +410,7 @@ SETTING_TYPES: Dict[str, Type] = {
     "registration_sleep_min": int,
     "registration_sleep_max": int,
     "registration_check_ip_location": bool,
+    "registration_browser_mode": str,
     "email_service_priority": dict,
     "tempmail_timeout": int,
     "tempmail_max_retries": int,
@@ -708,6 +715,7 @@ class Settings(BaseModel):
     registration_sleep_min: int = 5
     registration_sleep_max: int = 30
     registration_check_ip_location: bool = True
+    registration_browser_mode: str = "protocol"
 
     # 邮箱服务配置
     email_service_priority: Dict[str, int] = {"tempmail": 0, "moe_mail": 1}

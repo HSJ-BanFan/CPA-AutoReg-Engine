@@ -292,6 +292,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
         engine = RegistrationEngine(
             email_service=email_service,
             proxy_url=actual_proxy_url,
+            browser_mode=settings.registration_browser_mode,
             callback_logger=log_callback,
             task_uuid=task_uuid,
             status_callback=lambda st, **kw: task_manager.update_status(task_uuid, st, **kw),
