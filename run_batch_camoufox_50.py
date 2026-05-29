@@ -1,6 +1,7 @@
 """Batch Camoufox registration: 50 accounts, serial execution."""
 
 import io
+import random
 import sys
 import time
 
@@ -76,7 +77,7 @@ def main():
             fail += 1
             print(f"[{i}/{total}] FAIL: {str(r.get('error_message', ''))[:120]}")
 
-        time.sleep(5)
+        time.sleep(random.uniform(2, 5))
 
     print(f"\nBatch complete: {success}/{total} succeeded")
     for r in results:

@@ -380,7 +380,7 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
     # 验证码配置
     "email_code_timeout": SettingDefinition(
         db_key="email_code.timeout",
-        default_value=30,
+        default_value=45,
         category=SettingCategory.EMAIL,
         description="验证码等待超时时间（秒）"
     ),
@@ -748,7 +748,7 @@ class Settings(BaseModel):
     webchat2api_api_token: SecretStr = SecretStr("admin")
 
     # 验证码配置
-    email_code_timeout: int = 30
+    email_code_timeout: int = 45
     email_code_poll_interval: int = 3
 
 # 全局配置实例

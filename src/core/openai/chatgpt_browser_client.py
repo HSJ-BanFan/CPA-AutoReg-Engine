@@ -24,8 +24,8 @@ SIGNUP_URL = (
     f"&screen_hint=signup"
 )
 
-DEFAULT_TIMEOUT = 15000
-PAGE_LOAD_TIMEOUT = 45000
+DEFAULT_TIMEOUT = 20000
+PAGE_LOAD_TIMEOUT = 60000
 
 
 class BrowserAutomationError(Exception):
@@ -186,6 +186,27 @@ class ChatGPTBrowserClient:
         ]
         self._click_first(cookie_selectors, timeout=2000)
 
+    def _wait_for_cloudflare_challenge(self, timeout: int = 30) -> None:
+        """Detect and wait for Cloudflare challenge page to pass."""
+        cf_selectors = [
+            '#challenge-form',
+            '[class*="cf-challenge"]',
+            'text="Checking your browser"',
+            'text="Just a moment"',
+        ]
+        if not self._has_visible_selector(cf_selectors, timeout=2000):
+            return
+
+        self._log("检测到 Cloudflare 验证页面，等待通过...")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not self._has_visible_selector(cf_selectors, timeout=1500):
+                self._log("Cloudflare 验证已通过")
+                time.sleep(1)
+                return
+            time.sleep(3)
+        raise BrowserAutomationError("Cloudflare 验证超时，未能通过挑战页面")
+
     def _open_signup_entry(self) -> None:
         email_selectors = [
             'input[type="email"]',
@@ -201,9 +222,23 @@ class ChatGPTBrowserClient:
             'button:has-text("Sign up")',
             'text="Sign up for free"',
         ]
-        if not self._click_first(signup_selectors, timeout=5000):
-            raise BrowserAutomationError("未打开注册入口")
-        if not self._has_visible_selector(email_selectors, timeout=5000):
+
+        # Phase 1b: Retry loop for signup button detection
+        for attempt in range(3):
+            try:
+                if self._click_first(signup_selectors, timeout=10000):
+                    break
+                raise BrowserAutomationError("未找到注册按钮")
+            except Exception:
+                if attempt < 2:
+                    self._log(f"注册按钮未找到，重试 {attempt + 2}/3...")
+                    self._page.reload(wait_until="networkidle")
+                    self._wait_for_cloudflare_challenge()
+                    time.sleep(3)
+                else:
+                    raise BrowserAutomationError("未找到注册入口")
+
+        if not self._has_visible_selector(email_selectors, timeout=10000):
             raise BrowserAutomationError("未找到邮箱输入框")
 
     def _enter_email(self, email: str) -> None:
@@ -573,6 +608,13 @@ class ChatGPTBrowserClient:
                 wait_until="domcontentloaded",
                 timeout=PAGE_LOAD_TIMEOUT,
             )
+            # Phase 1a: Wait for network to settle then detect CF challenge
+            try:
+                self._page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            time.sleep(2)
+            self._wait_for_cloudflare_challenge()
             self._log("进入注册页面...")
             self._dismiss_cookie_banner()
             self._open_signup_entry()

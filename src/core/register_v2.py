@@ -146,10 +146,19 @@ class EmailServiceAdapter:
                 self.log_fn("验证码等待已取消")
                 return None
 
+            # Phase 3a: Adaptive poll intervals
+            elapsed = time.time() - started
+            if elapsed < 15:
+                poll_seconds = 2   # frequent polling when OTP likely arriving
+            elif elapsed < 40:
+                poll_seconds = 5   # moderate
+            else:
+                poll_seconds = 8   # spaced out when unlikely
+
             kwargs = {
                 "email": email,
                 "email_id": self.email_info.get("service_id"),
-                "timeout": min(remaining, 8),
+                "timeout": min(remaining, poll_seconds),
                 "otp_sent_at": otp_sent_at,
             }
             if "exclude_codes" in self._signature.parameters:
@@ -254,6 +263,14 @@ class RegistrationEngineV2:
                 "element not found",
                 "cloudflare",
                 "challenge",
+                # Phase 2b: additional retriable markers
+                "未找到注册按钮",
+                "未找到注册入口",
+                "host 解析失败",
+                "dns",
+                "connection reset",
+                "page crash",
+                "context was destroyed",
             ])
         return any(marker in text for marker in retriable_markers)
 
